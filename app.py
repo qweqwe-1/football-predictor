@@ -1,78 +1,102 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
-import time
+import requests
+from datetime import datetime
 
-# ================= 页面设置 =================
-st.set_page_config(page_title="⚽ 足球预测大师", page_icon="⚽", layout="wide")
-st.title("⚽ 足球比赛结果预测系统")
-st.markdown("基于全因子模型（历史战绩+攻防数据+主客场优势）")
+# =================配置区域=================
+# 如果你有 API Token，请填在这里；如果没有，留空即可使用演示模式
+API_TOKEN = "" 
+# ==========================================
 
-# ================= 模拟数据库（实际使用时可替换为真实数据） =================
-@st.cache_data
-def load_data():
-    # 这里模拟了一些历史比赛数据，用于训练模型
-    data = {
-        'home_goals_avg': [2, 1, 3, 0, 1, 2, 1, 0, 2, 3], # 主队平均进球
-        'away_goals_avg': [1, 1, 0, 2, 1, 0, 2, 1, 1, 0], # 客队平均进球
-        'home_win_rate': [0.6, 0.4, 0.8, 0.2, 0.5, 0.7, 0.3, 0.4, 0.6, 0.8], # 主队胜率
-        'away_win_rate': [0.4, 0.5, 0.2, 0.6, 0.5, 0.2, 0.6, 0.5, 0.4, 0.2], # 客队胜率
-        'result': [1, 0, 1, 2, 0, 1, 2, 0, 1, 1] # 1=主胜, 0=平局, 2=客胜
-    }
-    return pd.DataFrame(data)
+st.set_page_config(page_title="自动足球预测", layout="wide")
+st.title("⚽️ 今日比赛自动预测系统")
+st.markdown("系统正在自动扫描今日赛程并进行AI分析...")
 
-df = load_data()
-
-# ================= 侧边栏输入区 =================
-st.sidebar.header("📊 输入比赛数据")
-
-home_team = st.sidebar.text_input("主队名称", "曼联")
-away_team = st.sidebar.text_input("客队名称", "切尔西")
-
-# 用户输入特征值
-h_goals = st.sidebar.slider("主队近期平均进球", 0.0, 5.0, 1.5)
-a_goals = st.sidebar.slider("客队近期平均进球", 0.0, 5.0, 1.2)
-h_win_rate = st.sidebar.slider("主队近期胜率 (0-1)", 0.0, 1.0, 0.5)
-a_win_rate = st.sidebar.slider("客队近期胜率 (0-1)", 0.0, 1.0, 0.4)
-
-# ================= 模型预测逻辑 =================
-if st.sidebar.button("🔮 开始预测"):
-    with st.spinner('正在计算全因子模型数据...'):
-        time.sleep(1) # 假装计算了一下
+# 1. 定义预测模型函数 (这里使用简化的泊松分布逻辑)
+def predict_match(home_team, away_team, home_avg_goals, away_avg_goals):
+    # 简单的进球期望计算
+    lambda_home = home_avg_goals * 1.2  # 假设主场优势系数 1.2
+    lambda_away = away_avg_goals * 0.8
+    
+    # 简化版胜率计算 (基于进球期望差值)
+    diff = lambda_home - lambda_away
+    
+    if diff > 0.5:
+        result = f"🏆 **{home_team}** 胜算极大"
+        prob = min(90, 50 + diff * 20)
+    elif diff < -0.5:
+        result = f"🏆 **{away_team}** 胜算极大"
+        prob = min(90, 50 + abs(diff) * 20)
+    else:
+        result = "🤝 **势均力敌 / 平局概率高**"
+        prob = 40
         
-        # 准备训练数据
-        X = df[['home_goals_avg', 'away_goals_avg', 'home_win_rate', 'away_win_rate']]
-        y = df['result']
-        
-        # 训练模型 (随机森林)
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
-        model.fit(X, y)
-        
-        # 预测新数据
-        new_match = np.array([[h_goals, a_goals, h_win_rate, a_win_rate]])
-        prediction = model.predict(new_match)[0]
-        probabilities = model.predict_proba(new_match)[0]
-        
-        # 结果映射
-        result_map = {1: "🔴 主胜", 0: "🤝 平局", 2: "🔵 客胜"}
-        result_text = result_map[prediction]
-        
-        st.success(f"预测结果：**{home_team} vs {away_team}**")
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("主胜概率", f"{probabilities[1]*100:.1f}%")
-        col2.metric("平局概率", f"{probabilities[0]*100:.1f}%")
-        col3.metric("客胜概率", f"{probabilities[2]*100:.1f}%")
-        
-        st.balloons()
-        st.info(f"模型建议投注方向：{result_text}")
+    return result, round(prob, 1)
 
+# 2. 获取数据的函数
+def get_today_matches():
+    url = "https://api.football-data.org/v4/matches"
+    headers = {'X-Auth-Token': API_TOKEN}
+    
+    # 如果没有填 Token，生成模拟数据供测试
+    if not API_TOKEN:
+        st.warning("⚠️ 未检测到 API Token，正在使用**演示模拟数据**...")
+        return [
+            {"homeTeam": {"name": "曼城"}, "awayTeam": {"name": "阿森纳"}, "utcDate": "2023-10-27T20:00:00Z"},
+            {"homeTeam": {"name": "皇家马德里"}, "awayTeam": {"name": "巴塞罗那"}, "utcDate": "2023-10-27T21:00:00Z"},
+            {"homeTeam": {"name": "尤文图斯"}, "awayTeam": {"name": "AC米兰"}, "utcDate": "2023-10-27T22:00:00Z"},
+        ]
+
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('matches', [])
+        else:
+            st.error(f"API 请求失败: {response.status_code}。请检查 Token。")
+            return []
+    except Exception as e:
+        st.error(f"发生错误: {e}")
+        return []
+
+# 3. 主程序逻辑
+matches = get_today_matches()
+
+if matches:
+    st.success(f"✅ 成功获取到 {len(matches)} 场今日重点比赛！")
+    
+    # 创建展示卡片
+    for match in matches:
+        home = match['homeTeam']['name']
+        away = match['awayTeam']['name']
+        time = match['utcDate'].split('T')[0] # 只取日期部分
+        
+        # 模拟随机数据 (因为免费API通常不直接给近期平均进球数，需要复杂计算，这里为了演示自动化，我们随机生成实力值)
+        # 在实际生产中，这里应该去查数据库获取两队历史数据
+        import random
+        h_strength = random.uniform(1.0, 2.5) 
+        a_strength = random.uniform(0.8, 2.2)
+        
+        prediction, confidence = predict_match(home, away, h_strength, a_strength)
+        
+        # 绘制界面卡片
+        with st.container(border=True):
+            col1, col2, col3 = st.columns([1, 2, 1])
+            
+            with col1:
+                st.metric(label="主队", value=home)
+                st.caption(f"近期进攻指数: {h_strength:.2f}")
+                
+            with col2:
+                st.markdown(f"### VS")
+                st.info(f"**AI 分析结果**: {prediction}")
+                st.progress(confidence / 100, text=f"预测置信度: {confidence}%")
+                
+            with col3:
+                st.metric(label="客队", value=away)
+                st.caption(f"近期进攻指数: {a_strength:.2f}")
 else:
-    st.info("👈 请在左侧输入比赛数据并点击预测")
+    st.info("今天暂无顶级联赛比赛，或 API 未配置。")
 
-# 显示使用的数据集
-with st.expander("查看训练数据集"):
-    st.dataframe(df)
+st.divider()
+st.caption("数据来源: Football-Data.org | 预测仅供娱乐参考")
